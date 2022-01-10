@@ -12,6 +12,7 @@ from openpecha.core.annotation import Page, Span
 from openpecha.core.layer import InitialCreationEnum, Layer, LayerEnum, PechaMetaData
 from openpecha.core.pecha import OpenPechaFS
 from openpecha.utils import load_yaml
+from openpecha.core.ids import get_pecha_id
 from datetime import datetime
 
 
@@ -48,7 +49,6 @@ def writePage(page, opf_path, is_last, is_test):
 
 
 def extractLines(page):
-    # [volume, page, side, l1, ..., l7]
 
     lines = []
     vol = page["pbId"]
@@ -105,6 +105,7 @@ def getwork(work, opf_path, is_test):
         pages = text["data"]
         is_last = False if testUrl(work, i + 10) else True
         for page in pages:
+            page["text"] = page["text"].replace('\r', '')
             writePage(page, opf_path, is_last, is_test)
 
         if is_test:
@@ -120,11 +121,15 @@ def create_opf(file_name, formatted_line, opf_path):
     global vol_sutra_map
     vol_sutra_map[file_name] = formatted_line[0]["BiographyId"]
 
+    with open("sutra_map.txt","w") as f:
+        f.write(str(vol_sutra_map))
+
+
     opf = OpenPechaFS(opf_path=opf_path)
-    layers = {file_name: {LayerEnum.pagination: get_pagination_layer(formatted_line)}}
+    layers = {f"v{file_name}": {LayerEnum.pagination: get_pagination_layer(formatted_line)}}
 
     base_text = get_base_text(formatted_line)
-    bases = {file_name: base_text}
+    bases = {f"v{file_name}": base_text}
 
     opf.layers = layers
     opf.base = bases
@@ -164,8 +169,8 @@ def get_sutra_span_map(opf_path, work):
 def get_index_annotation(data, opf_path):
 
     work_id = data["sutraid"]
-    meta_data = get_page_metadata(data["page"], work_id, opf_path)
-    annotation = {"work_id": work_id, "parts": meta_data}
+    meta_data,spans = get_page_metadata(data["page"], work_id, opf_path)
+    annotation = {"work_id": work_id, "parts": meta_data ,"span":spans}
 
     page_annotation = {
         uuid4().hex: annotation
@@ -177,6 +182,7 @@ def get_index_annotation(data, opf_path):
 def get_page_metadata(page, work_id, opf_path):
     meta_datas = {}
     page_group = page.split(",")
+    spans = []
 
     for page in page_group:
         page_start = re.search(r"༼.+༽ (.+)~(.+)( \(.+\))?", page).group(1)
@@ -184,19 +190,23 @@ def get_page_metadata(page, work_id, opf_path):
         volume = int(re.search(r'(\d+?)-', page_start).group(1))
 
         start_span, end_span = get_span(page_start, page_end, opf_path)
-        meta_data = {uuid4().hex: {"work_id": f"{work_id}-{volume}", "Span": {"Vol": volume, "start": start_span, "end": end_span}}}
+        meta_data = {uuid4().hex: {"work_id": f"{work_id}-{volume}", "span": [{"vol": volume ,"start": start_span, "end": end_span}]}}
         meta_datas.update(meta_data)
+        spans.append({"vol": volume ,"start": start_span, "end": end_span})
 
-    return meta_datas
+    return (meta_datas,spans)
 
 
 def get_span(page_start, page_end, opf_path):
     start = ""
     end = ""
 
-    vol = int(re.search(r'(\d+?)-', page_start).group(1))
-    vol = "{:0>3d}".format(vol)
-   
+    
+    vol_start = int(re.search(r'(\d+?)-', page_start).group(1))
+    vol_end = int(re.search(r'(\d+?)-', page_end).group(1))
+    
+    vol = "{:0>3d}".format(vol_start)
+    
     page_start = get_standard_sutra_format(page_start)
     page_end = get_standard_sutra_format(page_end)
 
@@ -209,11 +219,11 @@ def get_span(page_start, page_end, opf_path):
     start_line = start_line if start_line else "firstline"
     end_line = end_line if end_line else "endline"
 
-    pagination_layer_path = Path(f"{opf_path}/layers/{vol}/Pagination.yml")
+    pagination_layer_path = Path(f"{opf_path}/layers/v{vol}/Pagination.yml")
     pagination_yml = load_yaml(pagination_layer_path)
     paginations = pagination_yml["annotations"]
 
-    base_layer_path = f"{opf_path}/base/{vol}.txt"
+    base_layer_path = f"{opf_path}/base/v{vol}.txt"
 
     for pagination in paginations:
         if paginations[pagination]["metadata"]["Img_name"] == start_img:
@@ -229,11 +239,15 @@ def get_span(page_start, page_end, opf_path):
                 end_index = paginations[pagination]["span"]["start"]
                 end = end_index - 1 + offset(base_layer_path, int(end_line), int(end_index), "end")
 
+
     return (start, end)
 
 
 def get_standard_sutra_format(value):
-    res = re.search(r"\d+?-\d+?-(\(.*\))?\d+?[a-z]+\d?", value).group(1)
+    try:
+        res = re.search(r"\d+?-\d+?-(\(.*\))?\d+?[a-z]+?\d?", value).group(1)
+    except Exception as e:
+        print(e) 
 
     if res:
         return value.replace(res, "")
@@ -340,7 +354,6 @@ def get_metadata(opf_path, work):
         "title": work[0],
         "language": "bo",
         "author": "",
-        "volume": vol_sutra_maps,
         "sutra": {},
     }
 
@@ -462,34 +475,33 @@ def load_json(opf_path):
 
 
 def parse_adarsha(ouput_path):
+    """ ["degekangyur", 2977724],
+    ['lhasakangyur', 2747736],
+    ['jiangkangyur', 2561408],
+    ['degetengyur', 2843235], """
 
-    works = {
-        ["degekangyur", 2977724, "Kangyur/"],
-        ['lhasakangyur', 2747736, "Kangyur/"],
-        ['jiangkangyur', 2561408, "Kangyur/"],
-        ['degetengyur', 2843235, "Tengyur/"],
-        ['tsongkhapa', 1465969 , "Works_of_Tibetan_Masters/Geden/"],
-        ['chodrapal', 2711704 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['choglenamgyal', 2973395 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['dolpopa', 2969222 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['gharungpa', 2715383 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['yeshegyatsho', 2728993 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['nyadbonkungapal', 2725129 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['thugsrjebrtsongrus', 2726404 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['lodropal', 2976581 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['matipanchen', 2720612 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['logrosgragspa', 2715915 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['yontenbzangpo', 2967211 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['sonamgragpa', 2977266 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['tshalminpa', 2727252 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['taranatha', 2730006 , "Works_of_Tibetan_Masters/Jonang/"],
-        ['8thkarmapa', 1984307 , "Works_of_Tibetan_Masters/Kagyu/"],
-        ['gampopa', 1464491 , "Works_of_Tibetan_Masters/Kagyu/"],
-        ['bonpokangyur', 2426116, "Texts_of_the_Bön_Tradition/"],
-        ['mipam', 1489991 , "Works_of_Tibetan_Masters/Nyingma/"],
-        ['gorampa', 1481195 , "Works_of_Tibetan_Masters/Sakya/"]
-
-    }
+    """ ['tsongkhapa', 1465969],
+    ['chodrapal', 2711704]
+    ['choglenamgyal', 2973395],
+    ['dolpopa', 2969222],
+    ['gharungpa', 2715383] 
+    ['yeshegyatsho', 2728993],
+    ['lodropal', 2976581],
+    ['nyadbonkungapal', 2725129], not working2"""
+    works = [
+        ['thugsrjebrtsongrus', 2726404],
+        ['matipanchen', 2720612],
+        ['logrosgragspa', 2715915],
+        ['yontenbzangpo', 2967211],
+        ['sonamgragpa', 2977266],
+        ['tshalminpa', 2727252],
+        ['taranatha', 2730006],
+        ['8thkarmapa', 1984307],
+        ['gampopa', 1464491],
+        ['bonpokangyur', 2426116],
+        ['mipam', 1489991],
+        ['gorampa', 1481195]
+    ]
 
     for work in works:
         parse_pecha(ouput_path, work)
@@ -500,9 +512,17 @@ def path_exist(output_path):
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 
+def create_description(work,output_path,pecha_id):
+    path = f"{output_path}/{pecha_id}/README.md"
+
+    with open(path,"w") as f:
+        f.write(f"{work[0]}")
+
+
 
 def parse_pecha(output_path, work, is_test=None):
-    par_dir = work[2] if len(work) == 3 else ""
     path_exist(output_path)
-    opf_path = f"{output_path}/{par_dir}{work[0]}/{work[0]}.opf"
+    pecha_id = get_pecha_id()
+    opf_path = f"{output_path}/{pecha_id}/{pecha_id}.opf"
     getwork(work, opf_path, is_test)
+    create_description(work,output_path,pecha_id)
