@@ -9,10 +9,11 @@ import json
 from bs4 import BeautifulSoup
 
 from openpecha.core.annotation import Page, Span
-from openpecha.core.layer import InitialCreationEnum, Layer, LayerEnum, PechaMetaData
+from openpecha.core.layer import Layer, LayerEnum
+from openpecha.core.metadata import InitialCreationType,InitialPechaMetadata
 from openpecha.core.pecha import OpenPechaFS
 from openpecha.utils import load_yaml
-from openpecha.core.ids import get_pecha_id
+from openpecha.core.ids import get_initial_pecha_id,get_base_id
 from datetime import datetime
 
 
@@ -24,24 +25,37 @@ sutraBase = "https://adarsha.dharma-treasure.org/api/kdbs/{name}/biographies/{su
 prev_volume = None
 prev_Line = []
 vol_sutra_map = {}
+vol_base_id_map = {}
+base_id_vol_map= []
+order = 0
 
 
 def writePage(page, opf_path, is_last, is_test):
 
-    global prev_Line, prev_volume
+    global prev_Line, prev_volume,vol_base_id_map,base_id_vol_map,order
     volume = extractLines(page)
     if volume == prev_volume and is_last == False:
         prev_Line.append(page)
     elif prev_volume != None and is_last == False:
         prev_volume = "{:0>3d}".format(int(prev_volume))
-        create_opf(str(prev_volume), prev_Line, opf_path)
+        base_id = get_base_id()
+        base_id_vol_map.append([base_id,str(prev_volume),order])
+        vol_base_id_map.update({str(prev_volume):base_id})
+        create_opf(base_id, prev_Line, opf_path)
+        print(prev_volume)
+        order+=1
         prev_Line.clear()
         prev_Line.append(page)
         prev_volume = volume
     elif is_last == True:
         prev_Line.append(page)
         volume = "{:0>3d}".format(int(volume))
-        create_opf(str(volume), prev_Line, opf_path)
+        base_id = get_base_id()
+        base_id_vol_map.append([base_id,str(volume),order])
+        vol_base_id_map.update({str(volume):base_id})
+        print(volume)
+        order+=1
+        create_opf(base_id, prev_Line, opf_path)
     else:
         prev_Line.clear()
         prev_Line.append(page)
@@ -49,11 +63,8 @@ def writePage(page, opf_path, is_last, is_test):
 
 
 def extractLines(page):
-
-    lines = []
     vol = page["pbId"]
     volume = int(re.search(r'(\d+?)-', vol).group(1))
-
     return volume
 
 
@@ -125,20 +136,19 @@ def create_opf(file_name, formatted_line, opf_path):
         f.write(str(vol_sutra_map))
 
 
-    opf = OpenPechaFS(opf_path=opf_path)
-    layers = {f"v{file_name}": {LayerEnum.pagination: get_pagination_layer(formatted_line)}}
+    opf = OpenPechaFS(path=opf_path)
+    layers = {f"{file_name}": {LayerEnum.pagination: get_pagination_layer(formatted_line)}}
 
     base_text = get_base_text(formatted_line)
-    bases = {f"v{file_name}": base_text}
+    bases = {f"{file_name}": base_text}
 
     opf.layers = layers
     opf.base = bases
     opf.save_base()
     opf.save_layers()
 
-
 def create_index_meta(opf_path, work):
-    opf = OpenPechaFS(opf_path=opf_path)
+    opf = OpenPechaFS(path=opf_path)
     index = Layer(annotation_type=LayerEnum.index, annotations=get_sutra_span_map(opf_path, work))
 
     meta = get_metadata(opf_path, work)
@@ -219,11 +229,11 @@ def get_span(page_start, page_end, opf_path):
     start_line = start_line if start_line else "firstline"
     end_line = end_line if end_line else "endline"
 
-    pagination_layer_path = Path(f"{opf_path}/layers/v{vol}/Pagination.yml")
+    pagination_layer_path = Path(f"{opf_path}/layers/{vol_base_id_map[vol]}/Pagination.yml")
     pagination_yml = load_yaml(pagination_layer_path)
     paginations = pagination_yml["annotations"]
 
-    base_layer_path = f"{opf_path}/base/v{vol}.txt"
+    base_layer_path = f"{opf_path}/base/{vol_base_id_map[vol]}.txt"
 
     for pagination in paginations:
         if paginations[pagination]["metadata"]["Img_name"] == start_img:
@@ -244,15 +254,14 @@ def get_span(page_start, page_end, opf_path):
 
 
 def get_standard_sutra_format(value):
+    print(value)
     try:
         res = re.search(r"\d+?-\d+?-(\(.*\))?\d+?[a-z]+?\d?", value).group(1)
-    except Exception as e:
-        print(e) 
-
-    if res:
         return value.replace(res, "")
-    else:
+    except Exception as e:
         return value
+
+
 
 
 def offset(base_layer_path, start_line, start_index, type_of_parse):
@@ -297,17 +306,14 @@ def get_pagination_layer(formatted_line):
 def get_page_annotation(line, char_walker):
 
     metadata = {}
-
     text = line["text"].lstrip("\n").lstrip("\n")
     imgnum = line["pbId"]
     pbid = line["id"]
-
     img_num_first = re.search(r'(\d+?-\d+?)-\d+?[a-z]?', imgnum).group(1)
     img_num_last = get_img_num(re.search(r'\d+?-\d+?-(\d+[a-z]?)', imgnum).group(1))
     img_link = f"https://files.dharma-treasure.org/degekangyur/degekangyur{img_num_first}/{imgnum}.jpg"
     metadata["pbId"] = pbid
     metadata["Img_name"] = imgnum
-
     text_len = 0 if len(text) <= 2 else len(text)-2
     page_annotation = {
         uuid4().hex: Page(span=Span(start=char_walker, end=char_walker + text_len), imgnum=img_num_last, reference=img_link, metadata=metadata)
@@ -338,7 +344,7 @@ def get_base_text(texts):
 
 
 def get_metadata(opf_path, work):
-    global vol_sutra_map
+    global vol_sutra_map,pechaid
 
     sutra_ids = sorted(set(vol_sutra_map.values()))
     vol_sutra_maps = {}
@@ -349,11 +355,12 @@ def get_metadata(opf_path, work):
         sutra_id = res.json()["data"]
         vol_sutra_maps[vol] = sutra_id["sutraid"]
 
+    base_meta = get_base_meta()
+
     source_metadata = {
-        "id": "",
         "title": work[0],
         "language": "bo",
-        "author": "",
+        "base":base_meta,
         "sutra": {},
     }
 
@@ -363,16 +370,30 @@ def get_metadata(opf_path, work):
         sutra_id = response.json()["data"]["sutraid"]
         sutra = response.json()["data"]
         sutra.pop("sutraid")
-        source_metadata["sutra"][f"{sutra_id}"] = sutra
+        ref_sutra = {k: v for k, v in sutra.items() if v}
+        source_metadata["sutra"][f"{sutra_id}"] = ref_sutra
 
     source_metadata["window.__data"] = start_work(opf_path, work)
-    instance_meta = PechaMetaData(
-        initial_creation_type=InitialCreationEnum.input,
-        created_at=datetime.now(),
-        last_modified_at=datetime.now(),
+    instance_meta = InitialPechaMetadata(
+        id = pechaid,
+        source=base,
+        initial_creation_type=InitialCreationType.input,
         source_metadata=source_metadata)
 
     return instance_meta
+
+
+def get_base_meta():
+    meta = {}
+    for base_vol in base_id_vol_map:
+        base_id,vol,order = base_vol
+        meta.update({base_id:{
+        "title":vol,
+        "base_file":f"{base_id}.txt",
+        "order":order
+        }})
+
+    return meta    
 
 
 def get_response(url):
@@ -487,9 +508,8 @@ def parse_adarsha(ouput_path):
     ['gharungpa', 2715383] 
     ['yeshegyatsho', 2728993],
     ['lodropal', 2976581],
-    ['nyadbonkungapal', 2725129], not working2"""
-    works = [
-        ['thugsrjebrtsongrus', 2726404],
+    ['nyadbonkungapal', 2725129], not working2
+    ['thugsrjebrtsongrus', 2726404],
         ['matipanchen', 2720612],
         ['logrosgragspa', 2715915],
         ['yontenbzangpo', 2967211],
@@ -501,6 +521,9 @@ def parse_adarsha(ouput_path):
         ['bonpokangyur', 2426116],
         ['mipam', 1489991],
         ['gorampa', 1481195]
+    """
+    works = [
+        ['degetengyur', 2843235]   
     ]
 
     for work in works:
@@ -521,8 +544,12 @@ def create_description(work,output_path,pecha_id):
 
 
 def parse_pecha(output_path, work, is_test=None):
+    global pechaid
     path_exist(output_path)
-    pecha_id = get_pecha_id()
-    opf_path = f"{output_path}/{pecha_id}/{pecha_id}.opf"
+    pechaid = get_initial_pecha_id()
+    opf_path = f"{output_path}/{pechaid}/{pechaid}.opf"
     getwork(work, opf_path, is_test)
-    create_description(work,output_path,pecha_id)
+    create_description(work,output_path,pechaid)
+
+if __name__ == "__main__":
+    parse_adarsha("./root")
