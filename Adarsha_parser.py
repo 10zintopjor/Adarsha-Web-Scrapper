@@ -149,8 +149,7 @@ def create_opf(file_name, formatted_line, opf_path):
 
 def create_index_meta(opf_path, work):
     opf = OpenPechaFS(path=opf_path)
-    index = Layer(annotation_type=LayerEnum.index, annotations=get_sutra_span_map(opf_path, work))
-
+    index = Layer(annotation_type=LayerEnum.index, annotations=get_annotations(opf_path, work))
     meta = get_metadata(opf_path, work)
     opf._index = index
     opf._meta = meta
@@ -158,7 +157,7 @@ def create_index_meta(opf_path, work):
     opf.save_meta()
 
 
-def get_sutra_span_map(opf_path, work):
+def get_annotations(opf_path, work):
     global vol_sutra_map
 
     with open("notes.txt", "w") as f:
@@ -211,7 +210,6 @@ def get_span(page_start, page_end, opf_path):
     start = ""
     end = ""
 
-    
     vol_start = int(re.search(r'(\d+?)-', page_start).group(1))
     vol_end = int(re.search(r'(\d+?)-', page_end).group(1))
     
@@ -220,11 +218,11 @@ def get_span(page_start, page_end, opf_path):
     page_start = get_standard_sutra_format(page_start)
     page_end = get_standard_sutra_format(page_end)
 
-    start_img = re.search(r"(\d+?-\d+?-\d+?[a-z]+)\d?", page_start).group(1).replace("line", "")
-    end_img = re.search(r"(\d+?-\d+?-\d+?[a-z]+)\d?", page_end).group(1).replace("line", "")
+    start_img = re.search(r"(\d+?-\d+?-\d*[a-z]*)\d?", page_start).group(1).replace("line", "")
+    end_img = re.search(r"(\d+?-\d+?-\d*[a-z]*)\d?", page_end).group(1).replace("line", "")
 
-    start_line = re.search(r"\d+?-\d+?-(\d+?)[a-z]+(\d?)", page_start).group(2)
-    end_line = re.search(r"\d+?-\d+?-(\d+?)[a-z]+(\d?)", page_end).group(2)
+    start_line = re.search(r"\d+?-\d+?-(\d*)[a-z]*(\d?)", page_start).group(2)
+    end_line = re.search(r"\d+?-\d+?-(\d*)[a-z]*(\d?)", page_end).group(2)
 
     start_line = start_line if start_line else "firstline"
     end_line = end_line if end_line else "endline"
@@ -232,7 +230,6 @@ def get_span(page_start, page_end, opf_path):
     pagination_layer_path = Path(f"{opf_path}/layers/{vol_base_id_map[vol]}/Pagination.yml")
     pagination_yml = load_yaml(pagination_layer_path)
     paginations = pagination_yml["annotations"]
-
     base_layer_path = f"{opf_path}/base/{vol_base_id_map[vol]}.txt"
 
     for pagination in paginations:
