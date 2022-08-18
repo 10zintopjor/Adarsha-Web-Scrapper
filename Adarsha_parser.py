@@ -15,7 +15,7 @@ from openpecha.utils import load_yaml
 from openpecha.core.ids import get_initial_pecha_id,get_base_id
 from datetime import datetime
 import logging
-logging.basicConfig(filename="pecha_id.log",format='%(message)s',filemode='w')
+logging.basicConfig(filename="pecha_id.log",format='%(message)s',filemode='a')
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -101,6 +101,7 @@ def format_text(text):
 
 
 def getwork(work, opf_path, is_test):
+    global base_id_vol_map,vol_base_id_map
     order = 1
     i = work[1]
     sutra_ids = []
@@ -111,7 +112,7 @@ def getwork(work, opf_path, is_test):
         base_name,i = volume
         base_id = get_base_id()
         vol = re.search("\d+",base_name)
-        base_id_vol_map.append([base_id,int(vol.group(0)),order])
+        base_id_vol_map.append([base_id,int(vol.group(0)),order,base_name])
         vol_base_id_map.update({int(vol.group(0)):base_id})
         print(base_name)
         while testUrl(work, i):
@@ -226,9 +227,8 @@ def get_span(page_start, page_end, opf_path):
     base_layer_path = f"{opf_path}/base/{vol_base_id_map[vol]}.txt"
 
     for pagination in paginations:
-        if re.search("\d+\-\d+\-(\d+)",start_img).group(1) == "1":
-            start = 0
-        elif paginations[pagination]["metadata"]["Img_name"] == start_img:
+        
+        if paginations[pagination]["metadata"]["Img_name"] == start_img:
             if start_line == "firstline":
                 start = paginations[pagination]["span"]["start"]
             else:
@@ -242,6 +242,8 @@ def get_span(page_start, page_end, opf_path):
                 end = end_index - 1 + offset(base_layer_path, int(end_line), int(end_index), "end")
 
 
+    if not start:
+        start = 0
     return (start, end)
 
 
@@ -261,9 +263,10 @@ def offset(base_layer_path, start_line, start_index, type_of_parse):
         base_text = f.read()
     count = 0
     char_count = 0
+    null_value = 0
 
     if start_line == 1 or start_index == len(base_text):
-        return 0
+        return null_value
 
     for i in range(start_index, len(base_text)):
         char_count += 1
@@ -274,8 +277,8 @@ def offset(base_layer_path, start_line, start_index, type_of_parse):
         elif type_of_parse == "end" and count == start_line:
             return char_count - 1
         elif i == len(base_text) - 1:
-            return 0
-
+            return null_value
+    return null_value
 
 def get_pagination_layer(formatted_text):
 
@@ -351,7 +354,6 @@ def get_metadata(opf_path, work):
         "title": work[0],
         "language": "bo",
         "base":base_meta,
-        "sutra": {},
     }
 
     for id in sutra_ids:
@@ -376,9 +378,9 @@ def get_metadata(opf_path, work):
 def get_base_meta():
     meta = {}
     for base_vol in base_id_vol_map:
-        base_id,vol,order = base_vol
+        base_id,vol,order,title = base_vol
         meta.update({base_id:{
-        "title":vol,
+        "title":title,
         "base_file":f"{base_id}.txt",
         "order":order
         }})
@@ -511,7 +513,7 @@ def parse_adarsha(ouput_path):
         ['gorampa', 1481195]
     """
     works = [
-        ['thugsrjebrtsongrus', 2726404]
+        ['lhasakangyur', 2747736]
     ]
 
     for work in works:
